@@ -1,0 +1,719 @@
+!ATH4@ST-ANDREWS.AC.UK
+!ANDREW HANNINGTON
+
+!Program for MCRT through non-uniform Density SPH particles following the SPAMCART & SPAMCART-HPB 
+! algorithms. See documentation for extra information on function.
+
+!---------------------------------------------------------------------------------------
+!=======================================================================================
+!			PROGRAM MAIN
+!=======================================================================================
+program main
+	use constants
+	use coordinates
+	implicit none
+		Real*8 :: ran								!Random Number
+		Real*8 :: tau								!Optical Depth 
+		Real*8 :: W_analog, W_ffs, W_p						!Packet probability weights: for analog mcrt, forced first scattering, and for packet when binned
+		Real*8 :: Inverse_W_ffs
+		logical :: First_Scatter						!Boolean to hold whether scattering in operation is the first scattering or not.
+		Real*8 :: taumax							!Maximum optical depth seen in a given simulation, as a proportion of the maximum tau
+		real*8,dimension(3) :: r_vec						!r_vec the packet postion
+		Real*8 :: L								!Distance for packet to travel
+		integer :: i,j,k,ii,jj
+		integer :: scatter
+		Logical :: ExitBool							!Boolean for packet escaping system
+		Logical	:: VacuumBool							!Boolean for whether the packet has entered vacuum
+		Real*8 :: nullL
+		Logical :: nullBool
+		integer :: loopcount
+		Real*8 :: step
+		integer :: endk
+		Real*8 :: maxmass
+		integer,allocatable,dimension(:) :: scatter_array
+		Real*8 :: scatter_av,scatter_av_sqrd, scatter_standarddev
+		Real*8 :: tausystem,tausystem_av,tausystem_av_sqrd, tausystem_standarddev
+		Real*8,allocatable,dimension(:) :: tausystem_array
+		Real*8 :: W
+
+	Print*, " "
+	Print*,"***!!!***"
+	Print*,"MCRT Binning System Width=",systemwidth
+	Print*,"MCRT number of bins (nbins)=",nBins
+	Print*,"***!!!***"
+	Print*, " "
+
+!Setup arrays for scatterings and tau calc.
+	allocate(scatter_array(nmc))
+	allocate(tausystem_array(nmc))
+
+!Seed the random number generator inbuilt to fortran90:
+	call random_seed(seed)				
+
+!Open save file:
+	Open(1,file=trim(adjustl(filename)))
+	
+!	open(3,file=scattersdat)
+
+!Call initialise SPH particles:
+	call initialise_particles
+
+!Call initialise Radiation Sources:
+!	call initialise_sources
+
+!Call initialise constants:
+	call initialise						
+
+
+!Set maximum mass and number of steps for tau and scatter calculation:
+!	maxmass = 5.d-1
+!	endk =	1000
+
+!Calculate size of step in units of mass:
+!	step = maxmass/dble(endk) 
+
+!---------------------------------------------------------------------------------------
+!Begin Scrolling over masses (thus changing optical depth of system) for tau and scatterings calc:
+!	Do jj=1,endk
+		!Update mass of all particles uniformly for tau and scatterings calc :
+!		mconst = (dble(jj)*step)
+!		m_array(1:n_particles) = mconst
+
+!		Print*,"Mass Increments completed=", (dble(jj)/dble(endk))*100.d0,"%"
+!		Print*,"Mass =",mconst
+!#######################################################################################
+	!Begin casting monte carlo packets:
+		do i=1,NmC								!Do i from 1 to Number of monte Carlo packet Nmc in incremements of 1
+!.......................................................................................
+		!Begin a mc packet at each source
+			Do k=1,1!n_sources
+
+			!Set source luminosity and origin from read in source data
+				Lumi = 1.d0!Lumi_array(k)
+				!source_origin(1:3) = source_origin_array(1:3,k)
+
+
+			!Start packet at source origin: 
+				r_vec = source_origin
+				otruevec = source_origin
+
+			!Set packet weighting:
+				W_analog= 1.d0!Lumi/DBLE(Nmc)
+
+			!Set intersects to false
+				xi_intersects = 0
+				nintersects = 0	
+
+			!Set Forced First Scatter Weighting back to analog weighting:
+				W_ffs = W_analog
+
+			!Set scatter and loop count back to zero:
+				scatter=0
+				loopcount = 0
+
+!======================================================================================
+		!	***
+		!	Some notes on the following:
+		!	The code should behave as follows:
+		!	When the MC packet is emitted the system sets up the intersecting particles
+		!	and distance to nearest particle via a call to "Vacuum_algorithm".
+		!	No intersecting particles means the packet will move to infinity, and so can be killed.
+		!	Vacuum check will then check if the packet lies in the defined region of 
+		!	any particle. If the particle is in a vacuum, the vacuum algorithm distance 
+		!	will be used to move the packet to the nearest intersecting particle. This should
+		!	force the packet to move to the outermost point of the nearest intersecting
+		!	particle, and continue the normal SPAMCART MCRT algorithm.
+		!	If the Distance finding algorithm finds no positive solution or an infinite solution
+		!	the packet has escaped the particle.
+		!	***
+			!Perform flight of MC packet:
+				do
+
+				VacuumBool = .false.
+
+				!Set new origin of packet:
+					otruevec = r_vec
+
+				!Get Direction
+					call nDirec_iso(ntruevec)
+
+					20 continue
+
+				!A vacuum algorithm call sets the interesected particles and finds distance
+				! to nearest intersecting particle:
+					call Vacuum_alg(otruevec,L,ExitBool)
+
+				!Kill packet if no intersects:
+					If (ExitBool .eqv. .TRUE.) then
+						GOTO 10
+					endif
+
+				!Sanity Check:
+					If(L.le.(0.d0))then
+						Print*,"[@MCRT @Init Vacuum:] L<= 0! Program will abort!"
+						Print*,"Scatters=",scatter
+						Print*,"L=",L
+						STOP
+					endif
+
+				!Check if packet is in a vacuum:
+					call vacuum_check(otruevec,VacuumBool)
+
+				!If the packet is in vacuum move the packet to the nearest intercepting particle:
+					If (VacuumBool .eqv. .TRUE.) then
+
+						do j=1,3
+							r_vec(j) = r_vec(j) + L*ntruevec(j)		
+						enddo
+
+						otruevec = r_vec
+
+					endif
+
+
+				!Get TauMax based on distance to edge of system:
+					call get_taumax(taumax)
+
+				
+				!Get a random number:
+					call random_number(ran)	
+				!Calculate optical depth
+					tau = (-1.d0*log(ran))
+
+				!Set tau*(chi^(-1)) constant needed for distance finder
+					tauchim1 = (tau*(chi**(-1)))
+
+				!Call subroutine to find distance particle travels :
+					call dist_finder(tau,L,ExitBool)			
+
+				!Check if particle was found to have exited the system:
+					If(ExitBool.eqv..TRUE.)then
+						GOTO 10
+					endif
+
+				!Sanity Check
+					If(L.lt.(0.d0))then
+						Print*,"[@MCRT @Flight standard:] L< 0! Program will abort!"
+						Print*,"Scatters=",scatter
+						Print*,"L=",L
+						STOP
+					endif
+
+				!Move MC packet by calculated length from distance finder:
+					do j=1,3
+						r_vec(j) = r_vec(j) + L*ntruevec(j)		
+					enddo
+				!Update packet origin 
+					otruevec = r_vec
+
+
+				!Check particle is still in the system
+					call vacuum_check(otruevec,VacuumBool)
+				!If packet has accidentally entered a vacuum state (Shouldn't be possible??)
+				!Then loop back and penetrate next particle intercept
+					If(vacuumBool .eqv. .true.) then
+!						Print*,"[@ MCRT_main:] Particle in Vacuum after flight! This shouldn't be possible! Check Algorithms!!!"
+!						STOP
+						GOTO 20
+					endif
+
+				!Only Bin data from packets not in a vacuum.
+					If (vacuumBool .eqv. .false.) then
+						call peel_off(r_vec,taumax,W_ffs,W_p)
+						call projection_binning(r_vec,W_p)
+					endif
+
+					scatter = scatter + 1
+
+					loopcount = loopcount + 1
+
+					!Check for infinite loops:
+					If(loopcount.ge.(loopmax-10))then
+						Print*, " "
+						Print*,"Loopcount =",loopcount
+						Print*,"VaccuumBool =",VacuumBool
+						Print*,"L =", L
+						Print*,"ovec =", otruevec(1:3)
+						Print*,"nvec =",nvec(1:3)
+						Print*,"tau =", tau
+						Print*,"xi_intersects=",xi_intersects(1:3,1:n_particles)
+						Print*,"ExitBool=",ExitBool
+						Print*, " "
+						If(loopcount.ge.loopmax) then
+							Print*,"Loop Limit exceeded! Infinite Loop Detected! Program will abort!"
+							STOP
+						endif
+					endif
+
+				enddo
+!======================================================================================
+
+				10 continue
+
+			enddo
+!.......................................................................................
+		!The following finds a new direction and set of intersects for a particle
+		!at the source origin. This is needed to find the average system optical
+		!depth for tay vs scatterings calc.
+
+!			call nDirec_iso(ntruevec)
+
+		!A vacuum algorithm call sets the interesected particles:
+!			call Vacuum_alg(source_origin,nullL,NullBool)
+
+!			call get_tausystem(tausystem)
+!			tausystem_array(i) = tausystem
+
+!			scatter_array(i) = scatter
+
+			If (mod(i,(nmc/inverseprintpercentage))==0) then
+		!		Print*, " "
+		!		Print*,"**!!**"
+				!Print'(A20,I3,A1)',
+				Print*,"Packets completed=", (dble(i)/dble(Nmc))*100.d0,"%"
+		!		Print*,"**!!**"
+		!		Print*, " "
+			endif
+
+		enddo
+!#######################################################################################
+
+!		scatter_av = 0.d0
+!		tausystem_av = 0.d0
+
+!		scatter_av_sqrd = 0.d0
+!		tausystem_av_sqrd = 0.d0
+
+	!Find the mean and standard deviation for scatterings and system optical depth:
+!		do j=1,Nmc
+!			tausystem_av = tausystem_av + tausystem_array(j)
+!			tausystem_av_sqrd = tausystem_av_sqrd + (tausystem_array(j))**2
+!
+!			scatter_av = scatter_av + dble(scatter_array(j))
+!			scatter_av_sqrd = scatter_av_sqrd + dble(scatter_array(j))**2
+!		enddo
+!
+!		scatter_av = scatter_av/dble(nmc)
+!		tausystem_av = tausystem_av/dble(nmc)
+!		scatter_av_sqrd = scatter_av_sqrd/dble(nmc)
+!		tausystem_av_sqrd  = tausystem_av_sqrd/dble(nmc)
+!
+!
+!		scatter_standarddev = DSQRT(scatter_av_sqrd - (scatter_av)**2)
+!		tausystem_standarddev = DSQRT(tausystem_av_sqrd - (tausystem_av)**2)
+!		
+!		Print*,"Tausystem average =", tausystem_av		
+!		Print*,"Scatter_av =",dble(scatter_av)
+!
+!		write(1,'(4(ES28.18E4,5x))') (/tausystem_av,dble(scatter_av),tausystem_standarddev,scatter_standarddev/)
+!
+!		do j=1,nmc
+!			write(3,*) scatter_array(j)
+!		enddo
+!
+!	enddo
+!---------------------------------------------------------------------------------------
+
+
+	Print*, " "
+	Print*,"***"
+	Print*,"Writing output data!"
+!
+!Write a header line into the data file
+	write (1,*) (/"    x    ", "    y    " , "  Weight "/)
+!Write all data to file
+!Here we subtract systemwidth from each x and y in order to go from the origin at (-systemwidth,-systemwidth) -> (0,0) again.
+	do jj=1,nBins
+		do ii=1,nBins
+			write (1,*) (/ (dble(ii)*dble(binWidth))-systemwidth,(dble(jj)*dble(binWidth))-systemwidth,dble(bin(ii,jj)) /)
+		enddo
+	enddo
+
+	Print*,"Data written!"
+	Print*,"***"
+	Print*, " "
+
+
+!close file:
+	close(1)
+!	close(3)
+
+!	Print*,"scatter_av=",scatter_av," +/- ",scatter_standarddev 
+!	Print*,"tausystem_av=",tausystem_av," +/- ",tausystem_standarddev 
+
+	Print*, " "
+	Print*,"***!!!***"
+	Print*,"Program Done!"
+	Print*,"***!!!***"
+	Print*, " "
+
+end program main
+!=======================================================================================
+!---------------------------------------------------------------------------------------
+subroutine initialise_particles
+	use constants
+	use coordinates
+	implicit none
+		integer :: readcheck
+		integer :: i
+
+	readcheck = 0
+
+	Print*, " "
+	Print*,"***"
+	Print*,"Reading SPH data!"
+
+	open (2,file=sphfile,status='old',iostat=readcheck)
+
+	If (readcheck .ne. (0)) then
+		Print*,"[@initialise_particles:] SPH data file reading error! Please check data and filename!"
+		Print*,"[@initialise_particles:] Program will abort!"
+		STOP
+	else
+		Print*,"SPH data read successfully!"
+		Print*,"***"
+		Print*, " "
+	endif
+
+
+
+!Read in number of sph particles from line 1 of sphdata
+	read(2,*) n_particles
+
+	Print*, " "
+	Print*,"***+++***"
+	Print*,"Number of SPH particles detected =",n_particles
+	Print*,"***+++***"
+	Print*, " "
+
+!Setup Particle Locations:
+	allocate(xi_array(3,n_particles))
+!Setup Particle Parameter arrays:
+	allocate(h_array(n_particles))
+	allocate(m_array(n_particles))
+	allocate(h_intercept_array(n_particles))
+	allocate(m_intercept_array(n_particles))
+
+	Do i=1,n_particles
+		read(2,*) xi_array(1:3,i), h_array(i), m_array(i)
+	enddo
+
+!Setup SPH Particles:	
+!	xi_array(1:3,1) = xi1(1:3)
+!	xi_array(1:3,2) = xi2(1:3)
+!	xi_array(1:3,3) = xi3(1:3)
+!	h_array = hconst
+!	m_array = mconst
+
+!Setup intersect array:
+	allocate(xi_intersects(3,n_particles))
+
+	xi_intersects = 0
+	nintersects = 0
+	h_intercept_array = 0.d0
+	m_intercept_array = 0.d0
+
+	RETURN
+end subroutine initialise_particles
+!---------------------------------------------------------------------------------------
+!=======================================================================================
+!---------------------------------------------------------------------------------------
+subroutine initialise_sources
+	use constants
+	use coordinates
+	implicit none
+		integer :: readcheck
+		integer :: i
+
+	readcheck = 0
+
+	Print*, " "
+	Print*,"***"
+	Print*,"Reading Source data!"
+
+	open (2,file=radsourcefile,status='old',iostat=readcheck)
+
+	If (readcheck .ne. (0)) then
+		Print*,"[@initialise_sources:] Sources data file reading error! Please check data and filename!"
+		Print*,"[@initialise_sources:] Program will abort!"
+		STOP
+	else
+		Print*,"Source data read successfully!"
+		Print*,"***"
+		Print*, " "
+	endif
+
+
+
+!Read in number of Radiation Sources from line 1 of sourcedata
+	read(2,*) n_sources
+
+	Print*, " "
+	Print*,"***+++***"
+	Print*,"Number of Radiation Souces particles detected =",n_sources
+	Print*,"***+++***"
+	Print*, " "
+
+!Setup Source Locations:
+	allocate(source_origin_array(3,n_sources))
+!Setup Rad Source Luminosity arrays:
+	allocate(Lumi_array(n_sources))
+
+	Do i=1,n_sources
+		read(2,*) source_origin_array(1:3,i), Lumi_array(i)
+	enddo
+
+!Setup SPH Particles:	
+!	source_origin_array(1:3,1) = source1(1:3)
+!	Lumi_array(1) = Lumiconst
+
+	RETURN
+end subroutine initialise_sources
+!---------------------------------------------------------------------------------------
+!---------------------------------------------------------------------------------------
+subroutine initialise
+	use constants
+	use coordinates
+	implicit none
+
+!Bin widths:
+	!Factor of 2 to include that this is a radius:
+	binWidth = 2.d0*systemwidth/dble(nBins)							![AU]
+
+!Allocate number of bin cells:
+	allocate(bin(nBins,nbins))	
+
+!Set bin array to all zero values:
+	bin=0
+
+!Calculate Exit Angles:
+	theta_im = ACOS(r_im(3)/(SQRT((r_im(1))**2+(r_im(2))**2+(r_im(3))**2)))
+	phi_im = atan2(r_im(2),r_im(1))
+
+end subroutine initialise
+!---------------------------------------------------------------------------------------
+!		Calculate Random ISOTROPIC Direction
+!---------------------------------------------------------------------------------------
+subroutine nDirec_iso(n_vec)
+	use constants
+	implicit none
+		Real*8,dimension(3), intent(out) :: n_vec				!Direction vector
+		Real*8 :: ran
+		Real*8 :: theta, phi
+		Real*8 :: nx,ny,nz
+		Real*8 :: mag
+
+		call random_number(ran)							!Get a random number 	
+		theta=ACOS(2.d0*ran - 1.d0)
+
+		call random_number(ran)							!Get a random number 	
+		phi=2.d0*Pi*ran
+
+		nx = SIN(theta)*COS(phi)
+		ny = SIN(theta)*SIN(phi)
+		nz = COS(theta)
+
+		mag = SQRT(nx**2+ny**2+nz**2)
+
+		nx = nx/mag
+		ny = ny/mag
+		nz = nz/mag
+
+		n_vec = (/nx,ny,nz/)
+
+!Print*,"FIXED N-VEC!!!"
+!n_vec = (/0.d0,-1.d0,0.d0/)
+
+end subroutine nDirec_iso
+!---------------------------------------------------------------------------------------
+!		Perform "Peeling-Off"/Next Event Estimator projections
+!
+!	This subroutine works by temporarily saving the true unit vector elsewhere
+!	and instead setting the unit vector from the current packet position to the
+!	detector plane. The integral for optical depth can then be performed to find the
+!	correct weighting of the packet's probability.
+!---------------------------------------------------------------------------------------
+subroutine peel_off(r_vec,taumax,W_ffs,W_p)
+	use constants
+	use coordinates
+	implicit none
+		real*8, dimension(3), intent(in) :: r_vec				!R_vector of MC packet
+		Real*8, intent(in) :: taumax
+		Real*8, intent(in) :: W_ffs
+		Real*8 :: tau_e
+		Real*8, intent(out) :: W_p
+		Real*8 :: r_d
+		Real*8 :: taumaxdum
+		Real*8,dimension(3) ::nvecdum,r_imdum
+		Real*8 :: mag
+		Integer :: i
+
+!	call get_d(r_vec,r_d)
+
+	nvecdum = ntruevec
+
+	mag = 0.0d0
+	Do i=1,3
+		mag = mag + (r_im(i)**2)
+	enddo
+	mag = DSQRT(mag)
+	
+	r_imdum = r_im/mag
+
+	ntruevec = r_imdum 
+	call get_taumax(taumaxdum)
+
+	ntruevec = nvecdum
+
+	tau_e = taumaxdum
+
+	W_p = W_ffs*EXP(-1.d0*tau_e)/(4.0*Pi)
+
+	RETURN
+end subroutine peel_off
+!---------------------------------------------------------------------------------------
+!		Bin weighting according to x and y coordinates
+!---------------------------------------------------------------------------------------
+subroutine projection_binning(r_vec,W_p)
+	use constants
+	implicit none
+		Real*8,dimension(3),intent(in) :: r_vec					!incoming position of packet
+		Real*8,intent(in) :: W_p						!Incoming weight of packet
+		Real*8 :: x_im, y_im							!x and y in image plane
+		integer :: binLocx, binLocy						!bin location in x and y coordinates
+		Real*8, dimension(3) :: r_vec_dum
+
+!(offset origin from (0,0) to (-systemwidth,-systemwidth)).
+!This prevents bugs with binning, but is undone in the writing process.
+
+	r_vec_dum = r_vec + systemwidth
+
+!Calculate position of packet on image plane:
+	x_im = r_vec_dum(1)*COS(theta_im)*COS(Phi_im) + r_vec_dum(2)*COS(theta_im)*Sin(Phi_im) &
+		&- r_vec_dum(3)*Sin(Theta_im)
+	y_im = -1.d0*r_vec_dum(1)*COS(theta_im)*SIN(Phi_im) + r_vec_dum(2)*COS(theta_im)*COS(Phi_im)
+
+!Calculate binning location:
+	binLocx = nint((x_im)/binWidth)
+	binLocy = nint((y_im)/binWidth)
+
+!Bin the particle if within correct bin limits,
+	If((binLocx>0).and.(binLocx<=nBins).and.(binLocy>0).and.(binLocy<=nBins)) then
+		bin(binLocx,binLocy) = bin(binLocx,binLocy) + W_P
+	endif
+end subroutine projection_binning
+!-----------------------------------------------------------------------
+
+!-----------------------------------------------------------------------
+!	Subroutine of Maximum Optical Depth from centre of particle
+!
+! This subroutine works by performing the effective integral for tau from
+! the packet position to the edge of each particle.
+!-----------------------------------------------------------------------
+subroutine get_taumax(taumax)
+	use constants
+	use coordinates
+	implicit none
+		Real*8,intent(out) :: taumax
+		Real*8 :: sigma
+		Real*8 :: W0,Wl
+		Real*8 :: tdum
+		Real*8 :: sigmadum
+		Logical :: Logicaldum
+		Real*8,dimension(3) :: xi
+		integer :: i	
+		Real*8 :: t_error
+
+	nvec = ntruevec
+	ovec = otruevec
+
+	sigmadum = 0.d0
+	sigma = 0.d0
+
+	tdum = 0.d0
+
+	Do i=1,nintersects
+		xi(1:3) = xi_intersects(1:3,i)
+		call set_particle_params(i)
+
+		call get_coords(xi,otruevec,0.d0)
+		call get_t(xi,otruevec,tdum)
+
+		call col_dens(s0,W0)
+		call col_dens(zeta,Wl)
+
+		If (tdum>0.d0) then
+			sigmadum = (m/(h**2)) * (W0 + Wl)
+		else if (tdum<0.d0) then
+			sigmadum = (m/(h**2)) * (abs(W0 - Wl))
+		else 
+			sigmadum = (m/(h**2)) * Wl
+		endif
+
+		sigma = sigma + sigmadum
+	enddo
+
+	taumax = chi*sigma
+
+	RETURN
+end subroutine get_taumax
+!-----------------------------------------------------------------------
+
+!-----------------------------------------------------------------------
+! Subroutine of Maximum Optical Depth from centre of system about rad source
+!
+!	Works the same as taumax but integrates from source origin to edge of system.
+!-----------------------------------------------------------------------
+subroutine get_tausystem(tausystem)
+	use constants
+	use coordinates
+	implicit none
+		Real*8,intent(out) :: tausystem
+		Real*8 :: sigma
+		Real*8 :: W0,Wl
+		Real*8 :: tdum
+		Real*8 :: sigmadum
+		Logical :: Logicaldum
+		Real*8,dimension(3) :: xi
+		integer :: i,j	
+		Real*8 :: s0dum	
+
+	nvec = ntruevec
+	ovec = otruevec
+
+	sigmadum = 0.d0
+	sigma = 0.d0
+
+	Do i=1,nintersects
+		xi(1:3) = xi_intersects(1:3,i)
+		call set_particle_params(i)
+
+		call get_coords(xi,source_origin,0.d0)
+		call get_t(xi,source_origin,tdum)
+
+		call col_dens(s0,W0)
+		call col_dens(zeta,Wl)
+
+		s0dum = 0.d0
+		Do j=1,3
+			s0dum = s0dum + ((xi(j) - source_origin(j))**2)
+		enddo
+		s0dum = DSQRT(s0dum)/h
+
+
+		If (tdum>0.d0) then
+			sigmadum = (m/(h**2)) * (W0 + Wl)
+		else if (tdum<0.d0) then
+			sigmadum = (m/(h**2)) * (abs(W0 - Wl))
+		else 
+			sigmadum = (m/(h**2)) * Wl
+		endif
+
+		sigma = sigma + sigmadum
+	enddo
+
+	tausystem = chi*sigma
+
+	RETURN
+end subroutine get_tausystem
+

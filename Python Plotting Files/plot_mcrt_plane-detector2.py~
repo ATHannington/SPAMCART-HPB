@@ -1,0 +1,98 @@
+import matplotlib.pylab as plt
+import matplotlib.pyplot as pyplt
+from matplotlib import ticker, colors, cm
+import numpy as np
+from numpy import ma
+
+titleSize=10
+axesLabelsSize=12
+colorBarLabelSize=12
+colormap = 'RdBu_r'
+delta = 1.0*10**-20
+setmin = 1.0*10**-3
+setmax = 4.0*10**0
+
+#nbins:
+nbins = 500
+
+plotTitle =  "Binned Location vs. Next Event Estimator (NEE) Weight"
+plotTitle = plotTitle + '\n'
+plotTitle = plotTitle + 'Internal source at (0,0,0) in R=1.0 Uniform Density Sphere'+'\n'+'No. SPH Particles = 136'
+#plotTitle = plotTitle + 'External source at (0,-5,0) and (0,5,0) - Equal Luminosity sources (L=1 [Code units]) '+'\n'+'No. SPH Particles = 3'
+#(100x Nmc)
+# Open the file and read everything as a string into 'f'
+f = open('mcrt_136.dat','r')
+
+#Separate the lines, skip the first
+lines = f.readlines()[1:]
+
+#Close the file
+f.close()
+
+# Initialize lists to add the data to
+x = []
+y = []
+z = []
+zdum = []
+
+for line in lines:						#goes over each 'line' in 'lines'
+    # Split our line into columns
+    data = line.split()
+    x.append(float(data[0]))
+    y.append(float(data[1]))
+    z.append(float(data[2])+delta)
+    if (float(data[2]) > 0.):
+    	zdum.append(float(data[2]))
+
+zdummin = min(zdum)
+print '\n',"Minimum non-zero z value found:",(zdummin)
+zdummax = max(zdum)
+print '\n',"Maximum z value found:",(zdummax)
+
+print '\n',"Setting minimum colour scale value to minimum z value!"
+
+setmin = zdummin
+#--- do the coloured 2D contour plot ---
+
+#locator=ticker.LogLocator()
+
+# Plot for tau1
+zmax1=max(z)
+zmin1=min(z)
+
+#xmin = np.amin(x)
+#xmax = np.amax(x)
+#ymin = np.amin(y)
+#ymax = np.amax(y)
+
+x = np.array(x)
+y = np.array(y)	
+
+x = x[:nbins]
+y = y[::nbins]
+
+lenx=len(x)
+leny=len(y)
+
+z = np.reshape(z,(lenx,leny))
+
+x,y=np.meshgrid(x,y)
+
+cmap=plt.cm.get_cmap(name='Reds',lut=256)#,norm=matplot.colors.LogNorm(vmin=0.000001,vmax=0.5)
+#cmap=plt.cm.ScalarMappable(norm=colors.LogNorm(vmin=a2min,vmax=a2max),cmap='Reds_r')
+
+plt.pcolor(x,y,z,norm=colors.LogNorm(vmin = setmin,vmax = zmax1),cmap=cmap) #norm=colors.LogNorm(vmin=a2min,vmax=1.),
+#plt.clim(0.0,0.6)
+cmap.set_under('black')
+cmap.set_over('orange')
+
+#plt.axis([wk0.min(),wk0.max(),nu.min(),nu.max()])
+plt.title(plotTitle, fontsize = titleSize)
+plt.xlabel("x [Code Units]", fontsize = axesLabelsSize)
+plt.ylabel("y [code Units]", fontsize = axesLabelsSize)
+cbar=plt.colorbar(norm=colors.Normalize(clip=False))
+cbar.ax.set_ylabel(r'NEE Weight',fontsize=colorBarLabelSize)
+#cmap.set_norm(matplot.colors.LogNorm(vmin=0.000001,vmax=0.5)	
+	
+plt.show()
+plt.legend()

@@ -1,0 +1,78 @@
+import matplotlib.pylab as plt
+import numpy as np
+import math
+
+plottitle = 'System Optical Depth (Tau) vs. Average Scatterings' + '\n' + 'Uniform Density Sphere - No. SPH Particles = 136' 
+plottitle = plottitle + '\n' + 'Large Data at 16% Completion'
+
+# Open the file and read everything as a string into 'f'
+f = open('tau_scatters_136_large.dat','r')
+#f = open('tau_vs_scatters_large_data_set1.dat','r')
+
+#Separate the lines
+lines = f.readlines()[0:]
+
+#Close the file
+f.close()
+
+# Initialize lists to add the data to
+tau_r = []
+scatter = []
+tau_error = []
+scatter_error = []
+
+for line in lines:						#goes over each 'line' in 'lines'
+    # Split our line into columns
+    data = line.split()
+    tau_r.append(float(data[0]))
+    scatter.append(float(data[1]))
+    tau_error.append(float(data[2]))
+    scatter_error.append(float(data[3]))
+
+taumax = int(math.ceil(max(tau_r)))
+
+#print taumax
+#print max(tau_r)
+
+#tau_base = range(0,taumax*10,1)
+
+#tau_theory = []
+#i=0
+#for line in tau_base:
+#	tau_theory.append(float(tau_base[i])/10.)
+#	i=i+1
+
+scatter_theory = [(float(tau_r[x]) + (float(tau_r[x])**2)/2.0) for x in range(0,len(tau_r))]
+
+xmin = min(tau_r)
+xmax = max(tau_r)
+ymin = 0.0#min(scatter)
+maxscatterlist = [max(scatter),max(scatter_theory)]
+ymax = max(maxscatterlist)
+
+xmin = xmin - xmin*0.1
+xmax = xmax + xmax*0.1
+ymin = ymin - ymin*0.1
+ymax = ymax + ymax*0.1
+
+# yerr = scatter_error
+plt.errorbar(tau_r,scatter,xerr = tau_error ,color='red', fmt= 'o',label='SPAMCART-HPB Simulation Data')
+plt.xlabel(r'Tau',fontsize=16)
+plt.ylabel(r'<N_scattering>',fontsize=16)
+plt.title(plottitle,fontsize=12)
+plt.axis([xmin,xmax,ymin,ymax])
+plt.gca().set_aspect('auto', adjustable='box')
+#plt.axes().set_aspect('equal')
+
+plt.plot(tau_r,scatter_theory,color='black',linewidth=2.5,label='Theory')
+#plt.plot(tau_theory,scatter_theory,color='black',label='Theory')
+plt.xlabel(r'Tau',fontsize=16)
+plt.ylabel(r'<N_scattering>',fontsize=16)
+plt.title(plottitle,fontsize=12)
+plt.axis([xmin,xmax,ymin,ymax])
+plt.gca().set_aspect('auto', adjustable='box')
+#plt.axes().set_aspect('equal')
+
+plt.legend(loc=2)
+
+plt.show()
